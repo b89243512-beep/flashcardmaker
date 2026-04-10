@@ -50,7 +50,9 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
   alternates: { canonical: "https://flashcardmaker.app" },
   icons: { icon: "/logo.svg", apple: "/logo.svg" },
-  verification: {},
+  verification: {
+    google: "8bAP1h-cQ1uuXxgt_uzSpwF01Rnl6484P9v-HL9eZw4",
+  },
   other: { "mobile-web-app-capable": "yes" },
   category: "education",
 };
