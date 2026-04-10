@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import {
@@ -31,6 +31,11 @@ import {
   FlaskConical,
   Calculator,
   History,
+  Plus,
+  Trash2,
+  ImageIcon,
+  Upload,
+  X,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -206,12 +211,54 @@ export default function Home() {
   const [topic, setTopic] = useState("");
   const [text, setText] = useState("");
   const [count, setCount] = useState(10);
-  const [mode, setMode] = useState<"topic" | "text">("topic");
+  const [mode, setMode] = useState<"topic" | "text" | "manual" | "image">("topic");
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
+  // Manual cards state
+  const [manualCards, setManualCards] = useState<Flashcard[]>([{ front: "", back: "" }]);
+
+  const addManualCard = () => setManualCards((prev) => [...prev, { front: "", back: "" }]);
+  const removeManualCard = (index: number) => setManualCards((prev) => prev.filter((_, i) => i !== index));
+  const updateManualCard = (index: number, side: "front" | "back", value: string) => {
+    setManualCards((prev) => prev.map((c, i) => i === index ? { ...c, [side]: value } : c));
+  };
 
   const handleGenerate = useCallback(async () => {
+    if (mode === "manual") {
+      const valid = manualCards.filter((c) => c.front.trim() && c.back.trim());
+      if (valid.length === 0) { setError("Please fill in at least one card."); return; }
+      setCards(valid);
+      return;
+    }
+
+    if (mode === "image" && imageFile) {
+      setLoading(true);
+      setError(null);
+      setCards([]);
+      try {
+        const base64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve((e.target?.result as string).split(",")[1]);
+          reader.readAsDataURL(imageFile);
+        });
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: base64, mimeType: imageFile.type, count }),
+        });
+        const data = await res.json();
+        if (data.error) { setError(data.error); }
+        else { setCards(data.cards); }
+      } catch { setError("Something went wrong. Please try again."); }
+      finally { setLoading(false); }
+      return;
+    }
+
     const input = mode === "topic" ? topic : text;
     if (!input.trim()) return;
 
@@ -237,13 +284,26 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [mode, topic, text, count]);
+  }, [mode, topic, text, count, manualCards, imageFile]);
+
+  const handleImageSelect = (file: File) => {
+    if (!file.type.startsWith("image/")) { setError("Please upload an image file."); return; }
+    if (file.size > 10 * 1024 * 1024) { setError("File too large. Maximum 10MB."); return; }
+    setImageFile(file);
+    const reader = new FileReader();
+    reader.onload = (e) => setImagePreview(e.target?.result as string);
+    reader.readAsDataURL(file);
+    setError(null);
+  };
 
   const handleReset = useCallback(() => {
     setCards([]);
     setTopic("");
     setText("");
     setError(null);
+    setManualCards([{ front: "", back: "" }]);
+    setImagePreview(null);
+    setImageFile(null);
   }, []);
 
   return (
@@ -268,21 +328,31 @@ export default function Home() {
               </div>
             ) : (
               <div className="mt-6 max-w-2xl mx-auto">
+                {/* Hidden file input */}
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageSelect(f); e.target.value = ""; }} />
+
                 <div className="bg-white rounded-2xl border border-border shadow-lg overflow-hidden">
                   {/* Mode tabs */}
-                  <div className="flex border-b border-border">
-                    <button onClick={() => setMode("topic")}
-                      className={`flex-1 py-3 text-sm font-medium transition-colors ${mode === "topic" ? "text-primary border-b-2 border-primary bg-surface" : "text-muted hover:text-foreground"}`}>
-                      📝 Enter Topic
-                    </button>
-                    <button onClick={() => setMode("text")}
-                      className={`flex-1 py-3 text-sm font-medium transition-colors ${mode === "text" ? "text-primary border-b-2 border-primary bg-surface" : "text-muted hover:text-foreground"}`}>
-                      📄 Paste Text / Notes
-                    </button>
+                  <div className="flex border-b border-border overflow-x-auto">
+                    {([
+                      { key: "topic" as const, label: "Topic", icon: "🔍" },
+                      { key: "text" as const, label: "Notes / Text", icon: "📄" },
+                      { key: "image" as const, label: "Image", icon: "🖼️" },
+                      { key: "manual" as const, label: "Manual", icon: "✏️" },
+                    ]).map((tab) => (
+                      <button key={tab.key} onClick={() => setMode(tab.key)}
+                        className={`flex-1 py-3 text-xs md:text-sm font-medium transition-colors whitespace-nowrap px-2 ${
+                          mode === tab.key ? "text-primary border-b-2 border-primary bg-surface" : "text-muted hover:text-foreground"
+                        }`}>
+                        <span className="hidden md:inline">{tab.icon} </span>{tab.label}
+                      </button>
+                    ))}
                   </div>
 
                   <div className="p-5">
-                    {mode === "topic" ? (
+                    {/* Topic mode */}
+                    {mode === "topic" && (
                       <input
                         type="text"
                         value={topic}
@@ -292,58 +362,146 @@ export default function Home() {
                         disabled={loading}
                         className="w-full text-base text-foreground placeholder:text-muted/40 bg-surface rounded-xl px-4 py-3 border border-border focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:opacity-50"
                       />
-                    ) : (
-                      <textarea
-                        value={text}
-                        onChange={(e) => setText(e.target.value)}
-                        rows={5}
-                        placeholder="Paste your lecture notes, textbook excerpt, or any study material here..."
-                        disabled={loading}
-                        className="w-full text-sm text-foreground placeholder:text-muted/40 bg-surface rounded-xl px-4 py-3 border border-border focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 resize-none disabled:opacity-50"
-                      />
                     )}
 
-                    {/* Card count selector */}
-                    <div className="flex items-center justify-between mt-4">
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-muted">Cards:</label>
-                        <div className="flex gap-1">
-                          {[5, 10, 15, 20].map((n) => (
-                            <button key={n} onClick={() => setCount(n)}
-                              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                                count === n ? "bg-primary text-white" : "bg-surface text-muted hover:text-foreground border border-border"
-                              }`}>
-                              {n}
-                            </button>
-                          ))}
+                    {/* Text/Notes mode */}
+                    {mode === "text" && (
+                      <div className="space-y-3">
+                        <textarea
+                          value={text}
+                          onChange={(e) => setText(e.target.value)}
+                          rows={6}
+                          placeholder={"Paste your lecture notes, textbook text, or study material here...\n\nYou can paste multiple paragraphs, bullet points, or even copy-paste from PDFs. The AI will extract key concepts and create flashcards from your content."}
+                          disabled={loading}
+                          className="w-full text-sm text-foreground placeholder:text-muted/40 bg-surface rounded-xl px-4 py-3 border border-border focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 resize-y min-h-[120px] disabled:opacity-50"
+                        />
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted">{text.length} / 5,000 characters</p>
+                          {text && <button onClick={() => setText("")} className="text-xs text-muted hover:text-red-500 transition-colors">Clear text</button>}
                         </div>
                       </div>
+                    )}
+
+                    {/* Image mode */}
+                    {mode === "image" && (
+                      <div>
+                        {imagePreview ? (
+                          <div className="relative">
+                            <img src={imagePreview} alt="Uploaded" className="max-h-48 mx-auto rounded-xl border border-border" />
+                            <button onClick={() => { setImagePreview(null); setImageFile(null); }}
+                              className="absolute top-2 right-2 w-7 h-7 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors">
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => fileInputRef.current?.click()}
+                            onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleImageSelect(f); }}
+                            onDragOver={(e) => e.preventDefault()}
+                            className="border-2 border-dashed border-primary/30 rounded-xl py-10 cursor-pointer hover:border-primary/50 hover:bg-surface/50 transition-all"
+                          >
+                            <div className="flex flex-col items-center gap-2">
+                              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                                <Upload className="w-6 h-6 text-primary" />
+                              </div>
+                              <p className="text-sm text-foreground font-medium">Upload a photo of your notes or textbook</p>
+                              <p className="text-xs text-muted">JPG, PNG, WebP — Max 10MB</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Manual mode */}
+                    {mode === "manual" && (
+                      <div className="space-y-3">
+                        {manualCards.map((card, i) => (
+                          <div key={i} className="bg-surface rounded-xl p-4 border border-border relative group">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-semibold text-primary">Card {i + 1}</span>
+                              {manualCards.length > 1 && (
+                                <button onClick={() => removeManualCard(i)}
+                                  className="opacity-0 group-hover:opacity-100 text-muted hover:text-red-500 transition-all">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              value={card.front}
+                              onChange={(e) => updateManualCard(i, "front", e.target.value)}
+                              placeholder="Question (front)"
+                              className="w-full text-sm bg-white rounded-lg px-3 py-2 border border-border focus:outline-none focus:border-primary/40 mb-2"
+                            />
+                            <input
+                              type="text"
+                              value={card.back}
+                              onChange={(e) => updateManualCard(i, "back", e.target.value)}
+                              placeholder="Answer (back)"
+                              className="w-full text-sm bg-white rounded-lg px-3 py-2 border border-border focus:outline-none focus:border-primary/40"
+                            />
+                          </div>
+                        ))}
+                        <button onClick={addManualCard}
+                          className="w-full py-2.5 rounded-xl border-2 border-dashed border-border text-muted hover:text-primary hover:border-primary/30 transition-colors flex items-center justify-center gap-2 text-sm">
+                          <Plus className="w-4 h-4" /> Add Another Card
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Bottom bar: count selector + generate button */}
+                    <div className="flex items-center justify-between mt-4">
+                      {mode !== "manual" ? (
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-muted">Cards:</label>
+                          <div className="flex gap-1">
+                            {[5, 10, 15, 20].map((n) => (
+                              <button key={n} onClick={() => setCount(n)}
+                                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                                  count === n ? "bg-primary text-white" : "bg-surface text-muted hover:text-foreground border border-border"
+                                }`}>
+                                {n}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted">{manualCards.filter(c => c.front && c.back).length} cards ready</p>
+                      )}
                       <button
                         onClick={handleGenerate}
-                        disabled={loading || !(mode === "topic" ? topic.trim() : text.trim())}
+                        disabled={loading || (
+                          mode === "topic" ? !topic.trim() :
+                          mode === "text" ? !text.trim() :
+                          mode === "image" ? !imageFile :
+                          !manualCards.some(c => c.front.trim() && c.back.trim())
+                        )}
                         className="btn-primary text-sm px-6 py-2.5 gap-2 disabled:opacity-40">
-                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                        {loading ? "Generating..." : "Generate Flashcards"}
+                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : mode === "manual" ? <Check className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+                        {loading ? "Generating..." : mode === "manual" ? "Create Flashcards" : "Generate Flashcards"}
                       </button>
                     </div>
                   </div>
                 </div>
 
                 {error && (
-                  <div className="mt-4 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-4 py-3">
-                    {error}
+                  <div className="mt-4 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-4 py-3 flex items-center justify-between">
+                    <span>{error}</span>
+                    <button onClick={() => setError(null)}><X className="w-4 h-4" /></button>
                   </div>
                 )}
 
                 {/* Quick topic suggestions */}
-                <div className="mt-4 flex flex-wrap justify-center gap-2">
-                  {["Photosynthesis", "World War II", "Spanish Basics", "Python Programming", "Human Anatomy", "Microeconomics"].map((t) => (
-                    <button key={t} onClick={() => { setTopic(t); setMode("topic"); }}
-                      className="text-xs px-3 py-1.5 rounded-full border border-border text-muted hover:text-primary hover:border-primary/30 hover:bg-surface transition-colors">
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                {mode === "topic" && (
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    {["Photosynthesis", "World War II", "Spanish Basics", "Python Programming", "Human Anatomy", "Microeconomics"].map((t) => (
+                      <button key={t} onClick={() => { setTopic(t); setMode("topic"); }}
+                        className="text-xs px-3 py-1.5 rounded-full border border-border text-muted hover:text-primary hover:border-primary/30 hover:bg-surface transition-colors">
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

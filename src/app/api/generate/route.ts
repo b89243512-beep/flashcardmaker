@@ -64,10 +64,10 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { topic, text, count } = body;
+    const { topic, text, count, image, mimeType } = body;
 
-    if (!topic && !text) {
-      return NextResponse.json({ error: "Please provide a topic or text." }, { status: 400 });
+    if (!topic && !text && !image) {
+      return NextResponse.json({ error: "Please provide a topic, text, or image." }, { status: 400 });
     }
 
     const safeTopic = topic ? sanitize(topic, 200) : "";
@@ -82,21 +82,35 @@ export async function POST(request: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
-    const prompt = safeText
-      ? `Generate exactly ${cardCount} study flashcards from the following text. Each flashcard should have a clear question on the front and a concise, accurate answer on the back.
+    const baseInstruction = `Return ONLY a valid JSON array with no markdown, no code blocks, no extra text. Format:
+[{"front":"question here","back":"answer here"}]`;
+
+    let result;
+
+    if (image && typeof image === "string") {
+      // Image mode
+      const allowedMimes = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
+      const safeMime = allowedMimes.includes(mimeType) ? mimeType : "image/jpeg";
+
+      result = await model.generateContent([
+        { text: `Analyze this image of study material, notes, or textbook page. Generate exactly ${cardCount} study flashcards covering the key concepts visible in the image. Each flashcard should have a clear question on the front and a concise answer on the back.\n\n${baseInstruction}` },
+        { inlineData: { mimeType: safeMime, data: image } },
+      ]);
+    } else {
+      const prompt = safeText
+        ? `Generate exactly ${cardCount} study flashcards from the following text. Each flashcard should have a clear question on the front and a concise, accurate answer on the back.
 
 Text: "${safeText}"
 
 ${safeTopic ? `Focus on: ${safeTopic}` : ""}
 
-Return ONLY a valid JSON array with no markdown, no code blocks, no extra text. Format:
-[{"front":"question here","back":"answer here"}]`
-      : `Generate exactly ${cardCount} study flashcards about "${safeTopic}". Cover the most important concepts, definitions, and facts that a student should know. Each flashcard should have a clear question on the front and a concise, accurate answer on the back.
+${baseInstruction}`
+        : `Generate exactly ${cardCount} study flashcards about "${safeTopic}". Cover the most important concepts, definitions, and facts that a student should know. Each flashcard should have a clear question on the front and a concise, accurate answer on the back.
 
-Return ONLY a valid JSON array with no markdown, no code blocks, no extra text. Format:
-[{"front":"question here","back":"answer here"}]`;
+${baseInstruction}`;
 
-    const result = await model.generateContent(prompt);
+      result = await model.generateContent(prompt);
+    }
     const responseText = result.response.text();
 
     // Extract JSON from response
